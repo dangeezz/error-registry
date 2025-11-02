@@ -1,0 +1,55 @@
+{
+  "name": "@dang33zz/error-registry",
+  "version": "1.0.0",
+  "description": "A configurable error handling system with registry pattern for flexible error code lookup, custom error classes, and global error handlers",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "npm run build && npm run test:run",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "error-handling",
+    "error-registry",
+    "error-management",
+    "typescript",
+    "error-handler",
+    "error-codes",
+    "registry-pattern"
+  ],
+  "author": "George Daniel<dang33z@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dangeezz/error-registry.git"
+  },
+  "bugs": {
+    "url": ""
+  },
+  "homepage": "",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0",
+    "@vitest/coverage-v8": "^1.0.0"
+  }
+}
+
