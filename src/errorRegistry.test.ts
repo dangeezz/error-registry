@@ -299,7 +299,7 @@ describe('createErrorRegistry', () => {
       await registry.handleError(error);
 
       expect(handler).toHaveBeenCalledTimes(1);
-      expect(handler).toHaveBeenCalledWith(error, undefined);
+      expect(handler).toHaveBeenCalledWith(error);
     });
 
     it('should call registered handler with context', async () => {
@@ -318,6 +318,26 @@ describe('createErrorRegistry', () => {
       await registry.handleError(error, ctx);
 
       expect(handler).toHaveBeenCalledWith(error, ctx);
+    });
+
+    it('should call registered handler with multiple context arguments', async () => {
+      const handler = vi.fn();
+      const registry = createErrorRegistry({
+        errors: {
+          'TEST': TestError,
+        },
+        handlers: {
+          'TEST': handler,
+        },
+      });
+
+      const error = registry.createError({ code: 'TEST', message: 'Test error' });
+      const requestId = 'abc123';
+      const userId = 'user456';
+      const timestamp = Date.now();
+      await registry.handleError(error, requestId, userId, timestamp);
+
+      expect(handler).toHaveBeenCalledWith(error, requestId, userId, timestamp);
     });
 
     it('should handle async handlers', async () => {
@@ -555,5 +575,153 @@ describe('createErrorRegistry', () => {
       expect(error.code).toBe('TEST');
     });
   });
+
+  describe('error creator factory functions', () => {
+    it('should support factory functions in errors config', () => {
+      class FactoryError extends Error {
+        a: string;
+        b: number;
+        c: boolean;
+
+        constructor(a: string, b: number, c: boolean) {
+          super(`${a}-${b}-${c}`);
+          this.a = a;
+          this.b = b;
+          this.c = c;
+        }
+      }
+
+      const registry = createErrorRegistry({
+        errors: {
+          'FACTORY': (data: { a: string; b: number; c: boolean }) => {
+            return new FactoryError(data.a, data.b, data.c);
+          },
+        },
+      });
+
+      const error = registry.createError({ a: 'test', b: 123, c: true, code: 'FACTORY' } as any);
+      expect(error).toBeInstanceOf(FactoryError);
+      expect((error as FactoryError).a).toBe('test');
+      expect((error as FactoryError).b).toBe(123);
+      expect((error as FactoryError).c).toBe(true);
+    });
+
+    it('should support factory functions in registerError', () => {
+      class FactoryError extends Error {
+        field1: string;
+        field2: number;
+
+        constructor(field1: string, field2: number) {
+          super(`${field1}-${field2}`);
+          this.field1 = field1;
+          this.field2 = field2;
+        }
+      }
+
+      const registry = createErrorRegistry<{ field1: string; field2: number; code?: string }, FactoryError>();
+      registry.registerError('FACTORY', (data: { field1: string; field2: number }) => {
+        return new FactoryError(data.field1, data.field2);
+      });
+
+      const error = registry.createError({ field1: 'test', field2: 456, code: 'FACTORY' } as any);
+      expect(error).toBeInstanceOf(FactoryError);
+      expect((error as FactoryError).field1).toBe('test');
+      expect((error as FactoryError).field2).toBe(456);
+    });
+  });
+
+  describe('clear, unregisterError, unregisterHandler', () => {
+    class TestError extends Error {
+      constructor(data: any) {
+        super(data.message);
+        this.name = 'TestError';
+      }
+    }
+
+    it('should unregister an error', () => {
+      const registry = createErrorRegistry({
+        errors: {
+          'TEST': TestError,
+        },
+      });
+
+      let error = registry.createError({ code: 'TEST', message: 'Test' });
+      expect(error).toBeInstanceOf(TestError);
+
+      registry.unregisterError('TEST');
+      error = registry.createError({ code: 'TEST', message: 'Test' });
+      expect(error).not.toBeInstanceOf(TestError);
+      expect(error).toBeInstanceOf(Error);
+    });
+
+    it('should unregister a handler', async () => {
+      const handler = vi.fn();
+      const registry = createErrorRegistry({
+        handlers: {
+          'TEST': handler,
+        },
+      });
+
+      const error = { code: 'TEST', message: 'Test' } as any;
+      await registry.handleError(error);
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      registry.unregisterHandler('TEST');
+      await registry.handleError(error);
+      expect(handler).toHaveBeenCalledTimes(1); // Should not be called again
+    });
+
+    it('should clear all errors and handlers', async () => {
+      class Error1 extends Error {
+        constructor(data: any) {
+          super(data.message);
+        }
+      }
+      class Error2 extends Error {
+        constructor(data: any) {
+          super(data.message);
+        }
+      }
+
+      const handler1 = vi.fn();
+      const handler2 = vi.fn();
+
+      const registry = createErrorRegistry({
+        errors: {
+          'ERROR1': Error1,
+          'ERROR2': Error2,
+        },
+        handlers: {
+          'ERROR1': handler1,
+          'ERROR2': handler2,
+        },
+      });
+
+      let error = registry.createError({ code: 'ERROR1', message: 'Test' });
+      expect(error).toBeInstanceOf(Error1);
+
+      error = registry.createError({ code: 'ERROR2', message: 'Test' });
+      expect(error).toBeInstanceOf(Error2);
+
+      registry.clear();
+
+      error = registry.createError({ code: 'ERROR1', message: 'Test' });
+      expect(error).not.toBeInstanceOf(Error1);
+      expect(error).toBeInstanceOf(Error);
+
+      error = registry.createError({ code: 'ERROR2', message: 'Test' });
+      expect(error).not.toBeInstanceOf(Error2);
+      expect(error).toBeInstanceOf(Error);
+
+      const testError = { code: 'ERROR1', message: 'Test' } as any;
+      await registry.handleError(testError);
+      expect(handler1).not.toHaveBeenCalled();
+
+      const testError2 = { code: 'ERROR2', message: 'Test' } as any;
+      await registry.handleError(testError2);
+      expect(handler2).not.toHaveBeenCalled();
+    });
+  });
+
 });
 

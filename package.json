@@ -1,6 +1,6 @@
 {
   "name": "@dang33zz/error-registry",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A configurable error handling system with registry pattern for flexible error code lookup, custom error classes, and global error handlers",
   "main": "./dist/index.js",
   "module": "./dist/index.js",

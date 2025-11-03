@@ -115,7 +115,7 @@ export interface Config<
    *     // If 404 is mapped to NotFoundError in errors, error is typed as NotFoundError
    *     console.log(error.code); // TypeScript knows this property exists
    *   },
-   *   500: (error) => logToSentry(error)
+   *   500: (error, requestId, userId) => logToSentry(error, requestId, userId)
    * }
    */
   handlers?: {
@@ -196,6 +196,34 @@ export interface ErrorRegistry<TErrorData = unknown, TError extends Error = Erro
    * });
    */
   registerHandler: (key: string | number, fn: (error: TError, ...ctx: any[]) => void | Promise<void>) => void;
+
+  /**
+   * Unregisters a custom error class or factory function for a specific error code or status code.
+   * 
+   * @param key - Error code or status code (string or number)
+   * 
+   * @example
+   * system.unregisterError("OUT_OF_STOCK");
+   */
+  unregisterError: (key: string | number) => void;
+
+  /**
+   * Unregisters a handler function for a specific error code or status code.
+   * 
+   * @param key - Error code or status code (string or number)
+   * 
+   * @example
+   * system.unregisterHandler(404);
+   */
+  unregisterHandler: (key: string | number) => void;
+
+  /**
+   * Clears all registered errors and handlers from the registry.
+   * 
+   * @example
+   * system.clear();
+   */
+  clear: () => void;
 }
 
 /**
@@ -212,6 +240,7 @@ export interface ErrorRegistry<TErrorData = unknown, TError extends Error = Erro
  * 
  * @template TErrorData - The type of error data
  * @template TError - The base error class type
+ * @template TErrors - The errors registry mapping codes to error creators (for type-safe handlers)
  * 
  * @example
  * ```typescript
@@ -337,6 +366,19 @@ export function createErrorRegistry<
     }
   };
 
+  const unregisterError = (key: string | number): void => {
+    errorRegistry.delete(String(key));
+  };
+
+  const unregisterHandler = (key: string | number): void => {
+    handlerRegistry.delete(String(key));
+  };
+
+  const clear = (): void => {
+    errorRegistry.clear();
+    handlerRegistry.clear();
+  };
+
   return {
     createError: create,
     handleError,
@@ -346,5 +388,8 @@ export function createErrorRegistry<
     registerHandler: (key: string | number, fn: (error: TError, ...ctx: any[]) => void | Promise<void>): void => {
       handlerRegistry.set(String(key), fn);
     },
+    unregisterError,
+    unregisterHandler,
+    clear,
   };
 }

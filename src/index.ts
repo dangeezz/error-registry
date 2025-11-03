@@ -7,4 +7,4 @@
  */
 
 export { createErrorRegistry } from './errorRegistry';
-export type { Config, ErrorRegistry } from './errorRegistry';
+export type { Config, ErrorRegistry, ErrorCreator } from './errorRegistry';
