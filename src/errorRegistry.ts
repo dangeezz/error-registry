@@ -1,4 +1,13 @@
 /**
+ * Type for error creators - either a factory function or a class constructor.
+ * 
+ * @template TErrorData - The type of error data
+ * @template TError - The base error class type
+ */
+export type ErrorCreator<TErrorData = unknown, TError extends Error = Error> =
+  ((data: TErrorData) => TError) | (new (data: TErrorData) => TError);
+
+/**
  * Configuration options for the error system.
  * 
  * @template TErrorData - The type of error data passed to createError and error constructors
@@ -39,17 +48,23 @@ export interface Config<TErrorData = unknown, TError extends Error = Error> {
   baseError?: ((data: TErrorData) => TError) | (new (data: TErrorData) => TError);
 
   /**
-   * Registry mapping error codes or status codes to custom error classes.
-   * When an error is created, the system will first check this registry for a matching class.
+   * Registry mapping error codes or status codes to custom error classes or factory functions.
+   * When an error is created, the system will first check this registry for a matching creator.
+   * 
+   * - **Class constructor**: Standard constructors that accept `(data: TErrorData)`.
+   *   Example: `ProductNotFoundError`
+   * 
+   * - **Factory function**: Provides full control over error creation.
+   *   Example: `(data) => new MyError(data.a, data.b, data.c)`
    * 
    * @example
    * errors: {
    *   "PRODUCT_NOT_FOUND": ProductNotFoundError,
    *   404: NotFoundError,
-   *   500: ServerError
+   *   500: (data) => new ServerError(data.message, data.statusCode)
    * }
    */
-  errors?: Record<string | number, new (data: TErrorData) => TError>;
+  errors?: Record<string | number, ErrorCreator<TErrorData, TError>>;
 
   /**
    * Registry mapping error codes or status codes to handler functions.
@@ -58,11 +73,11 @@ export interface Config<TErrorData = unknown, TError extends Error = Error> {
    * @example
    * handlers: {
    *   401: (error) => redirectToLogin(),
-   *   404: (error) => showNotFoundPage(),
-   *   500: (error) => logToSentry(error)
+   *   404: (error, ctx1, ctx2) => showNotFoundPage(error, ctx1, ctx2),
+   *   500: (error, requestId, userId) => logToSentry(error, requestId, userId)
    * }
    */
-  handlers?: Record<string | number, (error: TError, ctx?: unknown) => void | Promise<void>>;
+  handlers?: Record<string | number, (error: TError, ...ctx: any[]) => void | Promise<void>>;
 }
 
 /**
@@ -96,38 +111,73 @@ export interface ErrorRegistry<TErrorData = unknown, TError extends Error = Erro
    * If no handler is found via seekers, it falls back to using the error's constructor name.
    * 
    * @param error - The error instance to handle
-   * @param ctx - Optional context object passed to the handler
+   * @param ctx - Variadic context arguments passed to the handler
    * @returns Promise that resolves when handler completes
    * 
    * @example
-   * await system.handleError(error, { requestId: "abc123" });
+   * await system.handleError(error, requestId, userId, timestamp);
    */
-  handleError: (error: TError, ctx?: unknown) => Promise<void>;
+  handleError: (error: TError, ...ctx: any[]) => Promise<void>;
 
   /**
-   * Registers a custom error class for a specific error code or status code.
+   * Registers a custom error class or factory function for a specific error code or status code.
+   * 
+   * - **Class constructor**: Standard constructors that accept `(data: TErrorData)`.
+   *   Example: `OutOfStockError`
+   * 
+   * - **Factory function**: Provides full control over error creation.
+   *   Example: `(data) => new MyError(data.a, data.b, data.c)`
    * 
    * @param key - Error code or status code (string or number)
-   * @param ctor - Error class constructor
+   * @param creator - Error class constructor or factory function
    * 
    * @example
    * system.registerError("OUT_OF_STOCK", OutOfStockError);
+   * system.registerError("CUSTOM", (data) => new CustomError(data.field1, data.field2));
    */
-  registerError: (key: string | number, ctor: new (data: TErrorData) => TError) => void;
+  registerError: (key: string | number, creator: ErrorCreator<TErrorData, TError>) => void;
 
   /**
    * Registers a handler function for a specific error code or status code.
    * 
    * @param key - Error code or status code (string or number)
-   * @param fn - Handler function that receives the error and optional context
+   * @param fn - Handler function that receives the error and variadic context arguments
    * 
    * @example
-   * system.registerHandler(401, (error) => {
+   * system.registerHandler(401, (error, userId, sessionId) => {
    *   localStorage.removeItem("token");
    *   window.location.href = "/login";
    * });
    */
-  registerHandler: (key: string | number, fn: (error: TError, ctx?: unknown) => void | Promise<void>) => void;
+  registerHandler: (key: string | number, fn: (error: TError, ...ctx: any[]) => void | Promise<void>) => void;
+
+  /**
+   * Unregisters a custom error class or factory function for a specific error code or status code.
+   * 
+   * @param key - Error code or status code (string or number)
+   * 
+   * @example
+   * system.unregisterError("OUT_OF_STOCK");
+   */
+  unregisterError: (key: string | number) => void;
+
+  /**
+   * Unregisters a handler function for a specific error code or status code.
+   * 
+   * @param key - Error code or status code (string or number)
+   * 
+   * @example
+   * system.unregisterHandler(404);
+   */
+  unregisterHandler: (key: string | number) => void;
+
+  /**
+   * Clears all registered errors and handlers from the registry.
+   * 
+   * @example
+   * system.clear();
+   */
+  clear: () => void;
 }
 
 /**
@@ -184,20 +234,32 @@ export function createErrorRegistry<TErrorData = unknown, TError extends Error =
   };
   const { errors, handlers, seekers, baseError } = opts;
 
-  const errorRegistry = new Map<string, new (data: TErrorData) => TError>();
-  const handlerRegistry = new Map<string, (error: TError, ctx?: unknown) => void | Promise<void>>();
+  const errorRegistry = new Map<string, ErrorCreator<TErrorData, TError>>();
+  const handlerRegistry = new Map<string, (error: TError, ...ctx: any[]) => void | Promise<void>>();
+
+  // Helper function to create error from creator (factory or constructor)
+  const createErrorFromCreator = (creator: ErrorCreator<TErrorData, TError>, data: TErrorData): TError => {
+    // Check if it's a class constructor (has prototype) vs a factory function
+    if (typeof creator === 'function' && 'prototype' in creator) {
+      // It's a class constructor with standard signature: new (data: TErrorData) => TError
+      return new (creator as new (data: TErrorData) => TError)(data);
+    } else {
+      // It's a factory function - user has full control over how to create the error
+      return (creator as (data: TErrorData) => TError)(data);
+    }
+  };
 
   const create = (data: TErrorData): TError => {
-    // Try each seeker in priority order until we find a matching error class
+    // Try each seeker in priority order until we find a matching error creator
     if (seekers && seekers.length > 0) {
       for (const seeker of seekers) {
         const dataRecord = data as Record<string, unknown>;
         const value = dataRecord?.[seeker];
         if (value != null) {
           const key = String(value);
-          const CustomError = errorRegistry.get(key);
-          if (CustomError) {
-            return new CustomError(data);
+          const creator = errorRegistry.get(key);
+          if (creator) {
+            return createErrorFromCreator(creator, data);
           }
         }
       }
@@ -205,15 +267,7 @@ export function createErrorRegistry<TErrorData = unknown, TError extends Error =
 
     // Second: Fall back to user's base class if provided
     if (baseError) {
-      // Check if it's a class constructor (has prototype) vs a factory function
-      if (typeof baseError === 'function' && 'prototype' in baseError) {
-        // It's a class constructor with standard signature: new (data: TErrorData) => TError
-        return new (baseError as new (data: TErrorData) => TError)(data);
-      } else {
-        // It's a factory function - user has full control over how to create the error
-        // This handles cases like: (data) => new MyError(data.a, data.b, data.c)
-        return (baseError as (data: TErrorData) => TError)(data);
-      }
+      return createErrorFromCreator(baseError, data);
     }
 
     // Last resort: Generic Error
@@ -223,18 +277,18 @@ export function createErrorRegistry<TErrorData = unknown, TError extends Error =
 
   // Register provided errors and handlers
   if (errors) {
-    for (const [code, errorClass] of Object.entries(errors)) {
-      errorRegistry.set(String(code), errorClass);
+    for (const [code, creator] of Object.entries(errors)) {
+      errorRegistry.set(String(code), creator as ErrorCreator<TErrorData, TError>);
     }
   }
 
   if (handlers) {
     for (const [code, handler] of Object.entries(handlers)) {
-      handlerRegistry.set(String(code), handler);
+      handlerRegistry.set(String(code), handler as (error: TError, ...ctx: any[]) => void | Promise<void>);
     }
   }
 
-  const handleError = async (error: TError, ctx?: unknown): Promise<void> => {
+  const handleError = async (error: TError, ...ctx: any[]): Promise<void> => {
     // Try each seeker in priority order until we find a matching handler
     if (seekers && seekers.length > 0) {
       for (const seeker of seekers) {
@@ -244,7 +298,7 @@ export function createErrorRegistry<TErrorData = unknown, TError extends Error =
           const key = String(value);
           const handler = handlerRegistry.get(key);
           if (handler) {
-            await handler(error, ctx);
+            await handler(error, ...ctx);
             return;
           }
         }
@@ -256,19 +310,35 @@ export function createErrorRegistry<TErrorData = unknown, TError extends Error =
     if (constructorName) {
       const handler = handlerRegistry.get(constructorName);
       if (handler) {
-        await handler(error, ctx);
+        await handler(error, ...ctx);
       }
     }
+  };
+
+  const unregisterError = (key: string | number): void => {
+    errorRegistry.delete(String(key));
+  };
+
+  const unregisterHandler = (key: string | number): void => {
+    handlerRegistry.delete(String(key));
+  };
+
+  const clear = (): void => {
+    errorRegistry.clear();
+    handlerRegistry.clear();
   };
 
   return {
     createError: create,
     handleError,
-    registerError: (key: string | number, ctor: new (data: TErrorData) => TError): void => {
-      errorRegistry.set(String(key), ctor);
+    registerError: (key: string | number, creator: ErrorCreator<TErrorData, TError>): void => {
+      errorRegistry.set(String(key), creator);
     },
-    registerHandler: (key: string | number, fn: (error: TError, ctx?: unknown) => void | Promise<void>): void => {
+    registerHandler: (key: string | number, fn: (error: TError, ...ctx: any[]) => void | Promise<void>): void => {
       handlerRegistry.set(String(key), fn);
     },
+    unregisterError,
+    unregisterHandler,
+    clear,
   };
 }

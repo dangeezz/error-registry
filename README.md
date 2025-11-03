@@ -87,14 +87,15 @@ interface Config<TErrorData = unknown, TError extends Error = Error> {
   baseError?: ((data: TErrorData) => TError) | (new (data: TErrorData) => TError);
 
   /**
-   * Registry mapping error codes or status codes to custom error classes.
+   * Registry mapping error codes or status codes to custom error classes or factory functions.
    */
-  errors?: Record<string | number, new (data: TErrorData) => TError>;
+  errors?: Record<string | number, ((data: TErrorData) => TError) | (new (data: TErrorData) => TError)>;
 
   /**
    * Registry mapping error codes or status codes to handler functions.
+   * Handlers receive variadic context arguments for flexible error handling.
    */
-  handlers?: Record<string | number, (error: TError, ctx?: unknown) => void | Promise<void>>;
+  handlers?: Record<string | number, (error: TError, ...ctx: any[]) => void | Promise<void>>;
 }
 ```
 
@@ -103,9 +104,18 @@ interface Config<TErrorData = unknown, TError extends Error = Error> {
 An `ErrorRegistry` instance with the following methods:
 
 - **`createError(data: TErrorData): TError`** - Creates an error instance from error data. The system searches for error codes using the configured seekers, then checks the error registry. Falls back to baseError if provided, or generic Error as last resort.
-- **`handleError(error: TError, ctx?: unknown): Promise<void>`** - Handles an error by invoking the registered handler. The system searches for a handler by checking each seeker property on the error object. If no handler is found via seekers, it falls back to using the error's constructor name.
-- **`registerError(key: string | number, ctor: new (data: TErrorData) => TError): void`** - Registers a custom error class
-- **`registerHandler(key: string | number, fn: (error: TError, ctx?: unknown) => void | Promise<void>): void`** - Registers a handler function
+
+- **`handleError(error: TError, ...ctx: any[]): Promise<void>`** - Handles an error by invoking the registered handler with variadic context arguments. The system searches for a handler by checking each seeker property on the error object. If no handler is found via seekers, it falls back to using the error's constructor name.
+
+- **`registerError(key: string | number, creator: ErrorCreator<TErrorData, TError>): void`** - Registers a custom error class or factory function for a specific error code or status code. Accepts both class constructors and factory functions.
+
+- **`registerHandler(key: string | number, fn: (error: TError, ...ctx: any[]) => void | Promise<void>): void`** - Registers a handler function for a specific error code or status code. Handlers receive variadic context arguments.
+
+- **`unregisterError(key: string | number): void`** - Unregisters a custom error class or factory function for a specific error code or status code.
+
+- **`unregisterHandler(key: string | number): void`** - Unregisters a handler function for a specific error code or status code.
+
+- **`clear(): void`** - Clears all registered errors and handlers from the registry.
 
 ## Examples
 
@@ -150,9 +160,12 @@ const errorRegistry = createErrorRegistry({
 ```typescript
 const errorRegistry = createErrorRegistry();
 
-// Register errors at runtime
+// Register errors at runtime (class constructor)
 errorRegistry.registerError('OUT_OF_STOCK', OutOfStockError);
 errorRegistry.registerError(500, ServerError);
+
+// Register errors at runtime (factory function)
+errorRegistry.registerError('CUSTOM', (data) => new CustomError(data.field1, data.field2));
 
 // Register handlers at runtime
 errorRegistry.registerHandler(401, async (error) => {
@@ -165,19 +178,54 @@ errorRegistry.registerHandler('OUT_OF_STOCK', (error) => {
 });
 ```
 
-### Error Handling with Context
+### Error Handling with Variadic Context
 
 ```typescript
 const errorRegistry = createErrorRegistry({
   handlers: {
-    500: async (error, ctx) => {
-      // ctx can contain additional context like request ID, user info, etc.
-      await logToSentry(error, { context: ctx });
+    500: async (error, requestId, userId, timestamp) => {
+      // Handlers receive variadic context arguments
+      await logToSentry(error, { requestId, userId, timestamp });
+    },
+    404: (error, requestId) => {
+      // Can use single context argument
+      console.log(`Request ${requestId} resulted in 404`);
     },
   },
 });
 
+// Pass multiple context arguments
+await errorRegistry.handleError(error, 'req-123', 'user-456', Date.now());
+
+// Or pass a single context object (still works)
 await errorRegistry.handleError(error, { requestId: 'abc123', userId: 'user456' });
+```
+
+### Unregistering and Clearing
+
+```typescript
+const errorRegistry = createErrorRegistry({
+  errors: {
+    'OUT_OF_STOCK': OutOfStockError,
+    'NOT_FOUND': NotFoundError,
+  },
+  handlers: {
+    404: (error) => console.log('Not found'),
+    500: (error) => console.log('Server error'),
+  },
+});
+
+// Unregister a specific error
+errorRegistry.unregisterError('OUT_OF_STOCK');
+// Now creating an error with code 'OUT_OF_STOCK' will use baseError or generic Error
+
+// Unregister a specific handler
+errorRegistry.unregisterHandler(404);
+// Now handling an error with status 404 won't trigger the handler
+
+// Clear all registered errors and handlers
+errorRegistry.clear();
+// Registry is now empty
 ```
 
 ## Framework Integration
