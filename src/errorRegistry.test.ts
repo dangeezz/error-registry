@@ -277,7 +277,7 @@ describe('createErrorRegistry', () => {
   describe('error handling', () => {
     class TestError extends Error {
       code: string;
-      constructor(data: { code: string; message: string }) {
+      constructor(data: any) {
         super(data.message);
         this.name = 'TestError';
         this.code = data.code;
@@ -593,7 +593,7 @@ describe('createErrorRegistry', () => {
 
       const registry = createErrorRegistry({
         errors: {
-          'FACTORY': (data: { a: string; b: number; c: boolean }) => {
+          'FACTORY': (data: any) => {
             return new FactoryError(data.a, data.b, data.c);
           },
         },

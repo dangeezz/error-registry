@@ -8,12 +8,43 @@ export type ErrorCreator<TErrorData = unknown, TError extends Error = Error> =
   ((data: TErrorData) => TError) | (new (data: TErrorData) => TError);
 
 /**
+ * Helper type to extract the error type from an ErrorCreator.
+ * Works for both factory functions and class constructors.
+ * 
+ * @template T - The ErrorCreator type
+ */
+type ExtractErrorType<T> = 
+  T extends (data: any) => infer E 
+    ? E extends Error 
+      ? E 
+      : never
+    : T extends new (data: any) => infer E 
+      ? E extends Error 
+        ? E 
+        : never
+      : never;
+
+/**
+ * Maps error codes to their specific error types based on the errors registry.
+ * 
+ * @template TErrors - The errors registry record
+ */
+type ErrorTypeMap<TErrors extends Record<string | number, ErrorCreator<any, any>>> = {
+  [K in keyof TErrors]: ExtractErrorType<TErrors[K]>;
+};
+
+/**
  * Configuration options for the error system.
  * 
  * @template TErrorData - The type of error data passed to createError and error constructors
  * @template TError - The base error class type
+ * @template TErrors - The errors registry mapping codes to error creators (for type-safe handlers)
  */
-export interface Config<TErrorData = unknown, TError extends Error = Error> {
+export interface Config<
+  TErrorData = unknown, 
+  TError extends Error = Error,
+  TErrors extends Record<string | number, ErrorCreator<TErrorData, any>> = Record<string | number, ErrorCreator<TErrorData, TError>>
+> {
   /**
    * Array of property names to search for error codes in error data.
    * The system will check these properties in order to find the key for registry lookup.
@@ -51,6 +82,9 @@ export interface Config<TErrorData = unknown, TError extends Error = Error> {
    * Registry mapping error codes or status codes to custom error classes or factory functions.
    * When an error is created, the system will first check this registry for a matching creator.
    * 
+   * The types in this registry are used to provide type-safe handlers - handlers for specific
+   * error codes will receive the corresponding error type instead of the generic TError.
+   * 
    * - **Class constructor**: Standard constructors that accept `(data: TErrorData)`.
    *   Example: `ProductNotFoundError`
    * 
@@ -64,20 +98,32 @@ export interface Config<TErrorData = unknown, TError extends Error = Error> {
    *   500: (data) => new ServerError(data.message, data.statusCode)
    * }
    */
-  errors?: Record<string | number, ErrorCreator<TErrorData, TError>>;
+  errors?: TErrors;
 
   /**
    * Registry mapping error codes or status codes to handler functions.
    * When handleError is called, the system will invoke the matching handler.
    * 
+   * Handlers for error codes defined in the `errors` registry will automatically receive
+   * the specific error type instead of the generic TError. This provides type safety and
+   * better IDE autocomplete.
+   * 
    * @example
    * handlers: {
    *   401: (error) => redirectToLogin(),
-   *   404: (error, ctx1, ctx2) => showNotFoundPage(error, ctx1, ctx2),
+   *   404: (error) => {
+   *     // If 404 is mapped to NotFoundError in errors, error is typed as NotFoundError
+   *     console.log(error.code); // TypeScript knows this property exists
+   *   },
    *   500: (error, requestId, userId) => logToSentry(error, requestId, userId)
    * }
    */
-  handlers?: Record<string | number, (error: TError, ...ctx: any[]) => void | Promise<void>>;
+  handlers?: {
+    [K in keyof ErrorTypeMap<TErrors>]?: (
+      error: ErrorTypeMap<TErrors>[K], 
+      ...ctx: any[]
+    ) => void | Promise<void>;
+  } & Record<string | number, (error: TError, ...ctx: any[]) => void | Promise<void>>;
 }
 
 /**
@@ -194,6 +240,7 @@ export interface ErrorRegistry<TErrorData = unknown, TError extends Error = Erro
  * 
  * @template TErrorData - The type of error data
  * @template TError - The base error class type
+ * @template TErrors - The errors registry mapping codes to error creators (for type-safe handlers)
  * 
  * @example
  * ```typescript
@@ -221,8 +268,12 @@ export interface ErrorRegistry<TErrorData = unknown, TError extends Error = Erro
  * errorRegistry.registerHandler("NEW_CODE", (error) => handleNewError(error));
  * ```
  */
-export function createErrorRegistry<TErrorData = unknown, TError extends Error = Error>(
-  config?: Config<TErrorData, TError>
+export function createErrorRegistry<
+  TErrorData = unknown, 
+  TError extends Error = Error,
+  TErrors extends Record<string | number, ErrorCreator<TErrorData, any>> = Record<string | number, ErrorCreator<TErrorData, TError>>
+>(
+  config?: Config<TErrorData, TError, TErrors>
 ): ErrorRegistry<TErrorData, TError> {
   const defaultSeekers = ["code", "status"];
   const opts: Config<TErrorData, TError> = {
